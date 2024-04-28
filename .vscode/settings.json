@@ -1,3 +1,5 @@
 {
-  "cSpell.language": "en,fr"
+  "cSpell.language": "en,fr",
+  "cSpell.words": ["adimensionnée", "evals", "fistmele"],
+  "black-formatter.args": ["--line-length", "119"]
 }
