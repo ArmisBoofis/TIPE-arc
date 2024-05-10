@@ -7,11 +7,19 @@
 import json
 from typing import Any, Callable, Mapping
 
+import colorama
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.constants import g
 
-from outils_resolution import deformation_arc, dichotomie_2D
+from outils_resolution import deformation_arc, solveur_2D
+from progress_bar import progress_bar
+
+# Initialisation de colorama
+colorama.init()
+
+# Initialisation du LaTeX pour les graphiques matplotlib
+plt.rcParams["text.usetex"] = True
 
 # Caractéristiques retenues pour l'arc droit
 arc_droit = {
@@ -21,6 +29,7 @@ arc_droit = {
     "l": 0.52,  # Demie-longueur de la corde
     "theta_0": lambda _: 0,  # Déformation initiale (sans corde) de l'arc
     "W": lambda _: 18.9,  # Rigidité flexionnelle de l'arc
+    "zone_recherche": [(0.0, 0.0), (np.pi / 2, 2.5)],
 }
 
 # Caractéristiques retenues pour l'arc recurve
@@ -38,10 +47,10 @@ def W_recurve(s):
 
     # On fait une disjonction de cas selon que l'on se trouve sur la partie rigide de la branche ou non
     if s <= L0:
-        return 10e3
+        return 80
 
     else:
-        return max(25 * ((L - s) / (L - L0)) ** 2 + 25, 1)
+        return max(30 * ((L - s) / (L - L0)) ** 2 + 25, 1)
 
 
 arc_recurve = {
@@ -51,6 +60,7 @@ arc_recurve = {
     "l": 0.80,  # 0.76,  # Demie-longueur de la corde
     "theta_0": lambda s: theta_0_recurve(s),
     "W": W_recurve,  # Rigidité flexionnelle de l'arc
+    "zone_recherche": [(0.0, 0.0), (np.pi / 2, 5.0)],
 }
 
 
@@ -66,6 +76,7 @@ def adimensionne(arc: Mapping[str, Any]) -> Mapping[str, Any]:
         "l": arc["l"] / arc["b_max"],
         "theta_0": arc["theta_0"],
         "W": lambda s: arc["W"](s) / (arc["F_max"] * arc["b_max"] ** 2),
+        "zone_recherche": arc["zone_recherche"],
     }
 
 
@@ -164,36 +175,31 @@ def affichage_deformation(arc: Mapping[str, Any], nb_pos=5, nb_points_branche=20
     """
 
     # On commence par calculer le band de l'arc
-    sol = dichotomie_2D(
+    sol = solveur_2D(
         lambda p: f_1((0.0, p[1]), p[0], arc),
         lambda p: f_2((0.0, p[1]), p[0], arc),
-        (0.15, 0.0),
-        (1.0, 10),
-        sol_unique=True,
+        [(0.15, arc["zone_recherche"][0][1]), (1.0, arc["zone_recherche"][1][1])],
     )
 
-    if sol is not None:
-        band, _ = sol
-
-    else:
-        return None  # Si on n'arrive pas à déterminer le band, on s'arrête là
+    if sol is None:
+        print("Le calcul du band a échoué.")
+        return None
 
     # On génère les différentes valeurs de b pour lesquelles on va calculer la déformation
-    B = np.linspace(band + 0.01, 1.0, nb_pos)
+    B = np.linspace(sol[0] + 0.01, 1.0, nb_pos)
 
-    for b in B:
-        print("Calcul de la solution pour b =", b)
+    for k in range(len(B)):
+        # Affichage d'une barre de chargement (le calcul peut prendre du temps si <nb_pos> est grand)
+        progress_bar(k, nb_pos, prefix=colorama.Fore.RESET + f"Calcul pour b = {B[k]}... ")
 
         # On commence par calculer les valeurs de alpha et K correspondantes
-        sol = dichotomie_2D(
-            lambda p: f_1(p, b, arc), lambda p: f_2(p, b, arc), (0.0, 0.0), (np.pi / 2, 10.0), sol_unique=True
-        )
+        sol = solveur_2D(lambda p: f_1(p, B[k], arc), lambda p: f_2(p, B[k], arc), arc["zone_recherche"])
 
         if sol is not None:
-            alpha, K = sol
+            alpha, K = sol  # On récupère les valeurs calculées pour alpha et K
 
             # On calcule la déformation
-            deformation, sw, sol_sw = deformation_arc(alpha, K, b, arc, sol_complete=True)
+            deformation, sw, sol_sw = deformation_arc(alpha, K, B[k], arc, sol_complete=True)
 
             # Ensemble des abscisses curvilignes
             S = np.linspace(0.0, arc["L"], nb_points_branche)
@@ -214,15 +220,12 @@ def affichage_deformation(arc: Mapping[str, Any], nb_pos=5, nb_points_branche=20
             plt.plot(X, Y, linestyle="-", color="brown")
             plt.plot(Xc, Yc, linestyle="-", color="black", linewidth=0.5)
             plt.plot(
-                [sol_sw[1] * arc["b_max"], b * arc["b_max"]],
+                [sol_sw[1] * arc["b_max"], B[k] * arc["b_max"]],
                 [sol_sw[2] * arc["b_max"], 0.0],
                 linestyle="-",
                 color="black",
                 linewidth=0.5,
             )
-
-        else:
-            print("Échec pour b=", b)
 
     plt.gca().set_aspect("equal")  # Repère orthonormé
     plt.show()
@@ -235,44 +238,38 @@ def affiche_courbe_force_allonge(
     à la superposer à la courbe expérimentale."""
 
     # On commence par calculer le band de l'arc
-    sol = dichotomie_2D(
+    sol = solveur_2D(
         lambda p: f_1((0.0, p[1]), p[0], arc),
         lambda p: f_2((0.0, p[1]), p[0], arc),
-        (0.15, 0.0),
-        (1.0, 10),
-        sol_unique=True,
+        [(0.15, arc["zone_recherche"][0][1]), (1.0, arc["zone_recherche"][1][1])],
     )
 
-    if sol is not None:
-        band, _ = sol
-
-    else:
-        return None  # Si on n'arrive pas à déterminer le band, on s'arrête là
+    if sol is None:
+        print("Le calcul du band a échoué.")
+        return None
 
     # On génère les différentes valeurs de b pour lesquelles on va calculer la force associée
+    band = sol[0]
+
     B = np.linspace(band + 0.01, 1.0, nb_points)
     X, F = [], []  # Liste qui contiendra les valeurs des forces correspondantes
 
-    for b in B:
-        print("Calcul de la solution pour b =", b)
+    for k in range(len(B)):
+        # Affichage d'une barre de chargement (le calcul peut prendre du temps si <nb_pos> est grand)
+        progress_bar(k, nb_points, prefix=colorama.Fore.RESET + f"Calcul pour b = {B[k]}... ")
 
         # On calcule la valeur de K correspondante
-        sol = dichotomie_2D(
-            lambda p: f_1(p, b, arc), lambda p: f_2(p, b, arc), (0.0, 0.0), (np.pi / 2, 10.0), sol_unique=True
-        )
+        sol = solveur_2D(lambda p: f_1(p, B[k], arc), lambda p: f_2(p, B[k], arc), arc["zone_recherche"])
 
         if sol is not None:
-            alpha, K = sol
+            alpha, K = sol  # On récupère les valeurs calculées pour alpha et K
 
             # Calcul de l'allonge réelle en comptant à partir du band
-            X.append((b - band) * arc["b_max"])
+            X.append((B[k] - band) * arc["b_max"])
 
             # On déduit F de K à partir de la condition d'équilibre de l'encoche
             # Il ne faut pas oublier non plus de redimensionner la variable
             F.append(np.sin(alpha) * K * arc["F_max"])
-
-        else:
-            print("Échec pour b =", b)
 
     # On affiche les points calculés
     plt.plot(X, F, linestyle="--", color="#9F5941", label="Courbe théorique")
@@ -294,10 +291,8 @@ def affiche_courbe_force_allonge(
 arc_droit_ad = adimensionne(arc_droit)
 arc_recurve_ad = adimensionne(arc_recurve)
 
-# On récupère les données expérimentales stockées dans le fichier
 with open("donnees_experiences.json", "r") as f:
     donnees_exp = json.load(f)
 
-# Affichage des résultats pour l'arc droit
-# affiche_courbe_force_allonge(arc_droit_ad, donnees_exp["arc_droit"], nb_points=40)
-affiche_courbe_force_allonge(arc_recurve_ad, donnees_exp["arc_recurve"])
+# affichage_deformation(arc_recurve_ad, nb_pos=10)
+affiche_courbe_force_allonge(arc_recurve_ad, donnees_exp["arc_recurve"], nb_points=20)

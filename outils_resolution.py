@@ -4,12 +4,12 @@ les équations du modèle de l'arc."""
 from typing import Any, Callable, Mapping
 
 import numpy as np
-from scipy.integrate import OdeSolution, solve_ivp
+from scipy import integrate, optimize
 
 
 def deformation_arc(
     alpha: float, K: float, b: float, arc: Mapping[str, Any], sol_complete=False
-) -> tuple[OdeSolution, float, list[float]] | tuple[float, list[float]]:
+) -> tuple[integrate.OdeSolution, float, list[float]] | tuple[float, list[float]]:
     """Fonction calculant la déformation de l'arc pour un jeu de paramètres donnés :
     - <alpha> : angle formé par la corde et la verticale au niveau de l'encoche
     - <K> : force de tension dans la corde
@@ -39,24 +39,41 @@ def deformation_arc(
     # le paramètre <sol_complete> vaut False si on ne souhaite pas obtenir la déformation complète
     if sol_complete:
         # On intègre les équations pour 0 <= s <= L
-        res = solve_ivp(F, [0, L], Y_0, dense_output=True, events=event_sw)
-        sw, sol_sw = L, res.sol(L)  # Assignation temporaire
+        res = integrate.solve_ivp(F, [0, L], Y_0, dense_output=True, events=event_sw)
+        sw, sol_sw, sol = L, res.sol(L), res.sol  # Assignation temporaire
+
+        contact_corde = False  # Indique si s_w < L
 
         # On détermine si l'événement s'est produit (pour une abscisse sw suffisamment élevée)
         if len(res.t_events) > 0 and len(res.t_events[0] > 0):
             for k in range(len(res.t_events[0])):
                 if res.t_events[0][k] >= L / 2:
+                    contact_corde = True
+
                     sw = res.t_events[0][k]
                     sol_sw = res.y_events[0][k]
 
                     break
 
+        # Si s_w < L, on doit reprendre l'intégration entre s_w et L en prenant phi = phi(s_w)
+        if contact_corde:
+            F = lambda s, Y: np.array(
+                [
+                    0,
+                    np.sin(Y[0] + theta_0(s)),
+                    np.cos(Y[0] + theta_0(s)),
+                ]
+            )
+
+            res2 = integrate.solve_ivp(F, [sw, L], sol_sw, dense_output=True)  # Deuxième solution
+            sol = lambda s: (res.sol(s) if s <= sw else res2.sol(s))  # On recolle les morceaux
+
         # On retourne la solution <sol>, l'abscisse curviligne de contact et la solution évaluée en l'abscisse curviligne de contact
-        return res.sol, sw, sol_sw
+        return sol, sw, sol_sw
 
     else:
         # On intègre comme avant, mais on ne s'intéresse qu'à sol(sw)
-        res = solve_ivp(F, [0, L], Y_0, t_eval=[L], events=event_sw)
+        res = integrate.solve_ivp(F, [0, L], Y_0, t_eval=[L], events=event_sw)
         sw, sol_sw = res.t[0], np.array(res.y).reshape(1, 3)[0]  # Assignation temporaire
 
         # On détermine si l'événement s'est produit (pour une abscisse sw suffisamment élevée)
@@ -70,41 +87,6 @@ def deformation_arc(
 
         # On retourne l'abscisse curviligne de contact et sol(L)
         return sw, sol_sw
-
-
-def dichotomie(f: Callable[[float], float], a: float, b: float, epsilon=10e-5) -> float:
-    """Méthode de recherche dichotomique pour trouver
-    une racine d'une fonction continue."""
-
-    c = a
-
-    # On itère tant que l'on n'a pas obtenu la précision désirée
-    while (b - a) > epsilon:
-        c = (a + b) / 2.0  # On calcule le milieu du segment de recherche
-
-        # On réduit l'intervalle de recherche en fonction des signes de f(a) et f(c)
-        if f(c) * f(a) < 0:
-            b = c
-
-        else:
-            a = c
-
-    return c
-
-
-def tous_les_zeros(f: Callable[[float], float], a: float, b: float, min_dist: float = 0.1) -> list[float]:
-    """Permet de trouver tous les zéros d'une fonction continue
-    sur un intervalle donné (à condition que les zéros soient séparés de <min_dist> au moins)"""
-
-    X = np.arange(a, b, min_dist)  # On découpe l'intervalle en sous-intervalles de largeur <min_dist>
-    zeros = []  # Liste des zéros trouvés
-
-    for k in range(len(X) - 1):
-        # On lance une recherche plus précise sur chaque sous-intervalle
-        if f(X[k]) * f(X[k + 1]) < 0:
-            zeros.append(dichotomie(f, X[k], X[k + 1]))
-
-    return zeros
 
 
 def dichotomie_2D(
@@ -219,62 +201,30 @@ def dichotomie_2D(
     return None
 
 
-# B = np.linspace(0.3, 1, 30)
-# F_modele = []
+def solveur_2D(
+    f1: Callable[[float, float], float],  # Première fonction
+    f2: Callable[[float, float], float],  # Deuxième fonction
+    zone_recherche: list[tuple[float, float]],  # Zone de recherche pour la solution
+    tol=1e-10,  # Précision du résultat
+) -> tuple[float, float] | None:
+    """Fonction permettant de résoudre un système de deux équations à deux inconnues.
+    On utilise en premier lieu la fonction <root> du module <scipy.optimize>.
+    En cas de non convergence ou résultat erroné, on passe à la méthode dichotomique, plus stable."""
 
-# b_exp = np.array(
-#     [
-#         0,
-#         1.8,
-#         4.8,
-#         8.4,
-#         12.2,
-#         16.4,
-#         21.1,
-#         25.6,
-#         29.3,
-#         37.3,
-#         43.4,
-#         49.1,
-#         33.4,
-#         40.6,
-#         46.5,
-#         52.0,
-#     ]
-# )
-# F_exp = np.array(
-#     [
-#         0,
-#         500,
-#         1000,
-#         1500,
-#         2000,
-#         2500,
-#         3000,
-#         3500,
-#         4000,
-#         5000,
-#         6000,
-#         7000,
-#         4500,
-#         5500,
-#         6500,
-#         7500,
-#     ],
-#     dtype=float,
-# )
+    # On essaye dans un premier temps la méthode Newtonienne avec <scipy.optimize>
+    milieu = [(zone_recherche[0][0] + zone_recherche[1][0]) / 2.0, (zone_recherche[0][1] + zone_recherche[1][1]) / 2.0]
+    sol = optimize.root(
+        lambda p: [f1(p), f2(p)], milieu, tol=tol
+    )  # On prend comme point de départ le milieu de la zone de recherche
 
-# b_exp = (b_exp + 10.0) * 10 ** (-2)
-# F_exp = F_exp * 10 ** (-3) * g
+    if (
+        sol.success
+        and zone_recherche[0][0] <= sol.x[0] <= zone_recherche[1][0]
+        and zone_recherche[0][1] <= sol.x[1] <= zone_recherche[1][1]
+    ):
+        return sol.x
 
-# for b in B:
-#     alpha, K = dichotomie_2D(lambda p: f_1(p, b), lambda p: f_2(p, b), (0.0, 0.0), (np.pi / 2.0, 3.0))
-#     F_modele.append(np.sin(alpha) * K * F_max)
-
-# B *= b_max
-
-# plt.plot(B, F_modele, linestyle="-", marker=".", color="brown")
-# plt.plot(b_exp, F_exp, linestyle="None", marker="+", color="k")
-# plt.show()
-
-# fig, ax = plt.subplots()
+    else:
+        # La méthode Newtonienne a échoué, on passe à la méthode dichotomique
+        # Si la méthode dichotomique échoue, None est renvoyé (le cas est prévu à l'intérieur de <dichotomie_2D>)
+        return dichotomie_2D(f1, f2, zone_recherche[0], zone_recherche[1], epsilon=tol, sol_unique=True)

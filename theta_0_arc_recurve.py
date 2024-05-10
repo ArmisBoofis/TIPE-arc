@@ -3,8 +3,11 @@ afin de déterminer la fonction <theta_0> pour l'arc recurve."""
 
 import json
 
+import matplotlib.pyplot as plt
 import numpy as np
 from svgpathtools import svg2paths
+
+plt.rcParams["text.usetex"] = True
 
 # On récupère la courbure de l'arc à partir du fichier
 courbure_path = svg2paths("courbure_arc_recurve.svg")[0][0]
@@ -30,6 +33,17 @@ theta_0, S = np.array(theta_0[:-1]), np.array(S[:-1])
 # On l'approxime donc par un polynôme pour obtenir quelque chose de plus régulier
 theta_0_p = np.poly1d(np.polyfit(S, theta_0, deg))
 
-# Enfin, on enregistre les coefficients du polynôme dans un fichier pour un usage ultérieur
-with open("theta_0_arc_recurve.json", "w") as f:
-    json.dump(theta_0_p.coef.tolist(), f)
+X = np.linspace(0.0, L_r, 1000)
+Y = theta_0_p(X)
+
+plt.plot(X, Y, color="brown", label="Approximation", linestyle="--")
+plt.plot(S, theta_0, color="black", label="Solution exacte", linewidth=1)
+
+plt.gca().set(xlabel="$s$ (cm)", ylabel="$\\theta_{0,r}(s)$ (rad)")
+
+plt.legend()
+plt.show()
+
+# # Enfin, on enregistre les coefficients du polynôme dans un fichier pour un usage ultérieur
+# with open("theta_0_arc_recurve.json", "w") as f:
+#     json.dump(theta_0_p.coef.tolist(), f)
